@@ -1301,6 +1301,85 @@ class TestUtilsInternal(TestCase):
             [("max_clock", "handle", 1), "shutdown"],
         )
 
+    def test_max_clock_rate_reads_hip_device_property(self):
+        # HIP reports the peak clock in kHz; max_clock_rate() is documented in MHz.
+        properties = types.SimpleNamespace(clock_rate=2_670_000)
+
+        torch._utils_internal.max_clock_rate.cache_clear()
+        try:
+            with (
+                unittest.mock.patch.object(torch.version, "hip", "6.4"),
+                unittest.mock.patch.object(torch.cuda, "device"),
+                unittest.mock.patch.object(
+                    torch.cuda, "get_device_properties", return_value=properties
+                ) as get_device_properties,
+            ):
+                self.assertEqual(torch._utils_internal.max_clock_rate(), 2670)
+                get_device_properties.assert_called_once_with(0)
+                self.assertEqual(torch._utils_internal.max_clock_rate(1), 2670)
+                get_device_properties.assert_called_with(1)
+        finally:
+            torch._utils_internal.max_clock_rate.cache_clear()
+
+    def test_max_clock_rate_reports_zero_when_hip_reports_no_clock(self):
+        properties = types.SimpleNamespace(clock_rate=0)
+
+        torch._utils_internal.max_clock_rate.cache_clear()
+        try:
+            with (
+                unittest.mock.patch.object(torch.version, "hip", "6.4"),
+                unittest.mock.patch.object(torch.cuda, "device"),
+                unittest.mock.patch.object(
+                    torch.cuda, "get_device_properties", return_value=properties
+                ),
+            ):
+                self.assertEqual(torch._utils_internal.max_clock_rate(), 0)
+                self.assertEqual(torch._utils_internal.max_clock_rate(1), 0)
+        finally:
+            torch._utils_internal.max_clock_rate.cache_clear()
+
+    def test_max_clock_rate_caches_per_device(self):
+        clock_rates = {0: 2_670_000, 1: 1_760_000}
+
+        def get_device_properties(index):
+            return types.SimpleNamespace(clock_rate=clock_rates[index])
+
+        torch._utils_internal.max_clock_rate.cache_clear()
+        try:
+            with (
+                unittest.mock.patch.object(torch.version, "hip", "6.4"),
+                unittest.mock.patch.object(torch.cuda, "device"),
+                unittest.mock.patch.object(
+                    torch.cuda,
+                    "get_device_properties",
+                    side_effect=get_device_properties,
+                ) as get_device_properties_mock,
+            ):
+                self.assertEqual(torch._utils_internal.max_clock_rate(0), 2670)
+                self.assertEqual(torch._utils_internal.max_clock_rate(1), 1760)
+                self.assertEqual(get_device_properties_mock.call_count, 2)
+                self.assertEqual(torch._utils_internal.max_clock_rate(0), 2670)
+                self.assertEqual(get_device_properties_mock.call_count, 2)
+        finally:
+            torch._utils_internal.max_clock_rate.cache_clear()
+
+    def test_max_clock_rate_makes_the_queried_device_current(self):
+        properties = types.SimpleNamespace(clock_rate=1_760_000)
+
+        torch._utils_internal.max_clock_rate.cache_clear()
+        try:
+            with (
+                unittest.mock.patch.object(torch.version, "hip", "6.4"),
+                unittest.mock.patch.object(torch.cuda, "device") as device_guard,
+                unittest.mock.patch.object(
+                    torch.cuda, "get_device_properties", return_value=properties
+                ),
+            ):
+                self.assertEqual(torch._utils_internal.max_clock_rate(1), 1760)
+                device_guard.assert_called_once_with(1)
+        finally:
+            torch._utils_internal.max_clock_rate.cache_clear()
+
 
 @deprecated()
 def _deprecated_api(x, y=15):
